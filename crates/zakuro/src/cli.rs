@@ -28,6 +28,8 @@ pub struct Options {
     pub interpreter: bool,
     /// play no sound.
     pub mute: bool,
+    /// start in full screen, as F11 would (nativeMons).
+    pub fullscreen: bool,
 }
 
 const USAGE: &str = "\
@@ -60,6 +62,7 @@ options:
   --interpreter                    interpret everything, even with recompiled
                                    code around
   --mute                           play no sound
+  --fullscreen                     start in full screen
   --data <dir>                     where saves live (default: the system's
                                    place for data, ~/.local/share/zakuro,
                                    ~/Library/Application Support/zakuro or
@@ -85,6 +88,7 @@ pub fn parse() -> Result<Options, String> {
         data: None,
         interpreter: false,
         mute: false,
+        fullscreen: false,
     };
 
     let mut args = std::env::args().skip(1);
@@ -129,6 +133,7 @@ pub fn parse() -> Result<Options, String> {
             }
             "--interpreter" => options.interpreter = true,
             "--mute" => options.mute = true,
+            "--fullscreen" => options.fullscreen = true,
             "--profile" => options.profile = true,
             "--test-pattern" => options.test_pattern = true,
             // macOS hands an app it hasn't run before a process number

@@ -554,6 +554,9 @@ impl ApplicationHandler for App {
                 self.gui = Some(Gui::new(&window));
                 self.window = Some(window);
                 self.backend = Some(backend);
+                if self.options.fullscreen {
+                    self.toggle_fullscreen();
+                }
                 // the game the command line names starts on the device the
                 // presenter may lend the renderer, once there is one
                 self.start();

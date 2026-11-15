@@ -1,5 +1,5 @@
-//! nativemons-recomp build <rom> <work dir> <library> [--cache <dir>] | check <library>: recompiles a player's own
-//! dump for Zakuro with no window, printing "nativemons: <percent> <text>" lines for the nativeMons launcher.
+//! nativemons-recomp build <rom> <work dir> <library> [--cache <dir>] [--shared-hints <dir>] | check <library> |
+//! id <rom>: recompiles a player's own dump for Zakuro with no window, for the nativeMons launcher.
 
 use std::collections::HashSet;
 use std::io::Write;
@@ -19,11 +19,17 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
         Some("build") if args.len() >= 4 => {
-            let cache = args.iter().position(|a| a == "--cache").and_then(|i| args.get(i + 1)).map(PathBuf::from);
-            run_build(Path::new(&args[1]), Path::new(&args[2]), Path::new(&args[3]), cache.as_deref())
+            let option = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(PathBuf::from);
+            let rom = Path::new(&args[1]);
+            match option("--shared-hints") {
+                Some(dir) => merge_shared_hints(rom, &dir),
+                None => Ok(()),
+            }
+            .and_then(|()| run_build(rom, Path::new(&args[2]), Path::new(&args[3]), option("--cache").as_deref()))
         }
         Some("check") if args.len() == 2 => return check(Path::new(&args[1])),
-        _ => Err("usage: nativemons-recomp build <rom> <work dir> <library> [--cache <dir>] | check <library>".to_owned()),
+        Some("id") if args.len() == 2 => title_id(Path::new(&args[1])).map(|(id, hash)| report(&format!("id {id:016X} {hash:016X}"))),
+        _ => Err("usage: nativemons-recomp build <rom> <work dir> <library> [--cache <dir>] [--shared-hints <dir>] | check <library> | id <rom>".to_owned()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -120,6 +126,34 @@ fn run_build(rom: &Path, work: &Path, library: &Path, cache: Option<&Path>) -> R
     compile::shared(&compiler, &objects, &temp)?;
     std::fs::rename(&temp, library).map_err(|e| format!("could not finish {}, {e}", library.display()))?;
     report("100 Ready");
+    Ok(())
+}
+
+/// the title id and the hash 3dsrecomp keys hints by: one revision or update's addresses never reach another's.
+fn title_id(rom: &Path) -> Result<(u64, u64), String> {
+    let title = recomp3ds::rom::Title::load(rom).map_err(|e| format!("could not load {}, {e}", rom.display()))?;
+    let programs = recomp3ds::programs(&title, recomp3ds::Mods::default()).map_err(|e| format!("could not read the code, {e}"))?;
+    let (_, exe) = programs.iter().find(|(name, _)| name == "executable").ok_or("the title has no executable")?;
+    Ok((title.program_id(), build::code_hash(exe)))
+}
+
+/// adds the shared list for this exact code (<dir>/<title id>-<code hash>.hints, from players who shared theirs) to
+/// the player's own in 3dsrecomp's folder, which the build reads. 3dsrecomp keeps only addresses inside the code.
+fn merge_shared_hints(rom: &Path, dir: &Path) -> Result<(), String> {
+    let (id, hash) = title_id(rom)?;
+    let shared = dir.join(format!("{id:016X}-{hash:016X}.hints"));
+    let Ok(text) = std::fs::read_to_string(&shared) else { return Ok(()) };
+    let Some(own_dir) = recomp_abi::library_dir() else { return Ok(()) };
+    let own = own_dir.join(recomp_abi::library_name(id)).with_extension("hints");
+    let mut all: Vec<u32> = build::read_hints(&std::fs::read_to_string(&own).unwrap_or_default());
+    let before = all.len();
+    all.extend(build::read_hints(&text));
+    all.sort_unstable();
+    all.dedup();
+    std::fs::create_dir_all(&own_dir).map_err(|e| format!("could not create {}, {e}", own_dir.display()))?;
+    let body: String = all.iter().map(|a| format!("{a:08X}\n")).collect();
+    std::fs::write(&own, format!("# this player's and shared hints, odd for Thumb\n{body}")).map_err(|e| format!("could not write {}, {e}", own.display()))?;
+    report(&format!("1 {} shared hints added to {before}", all.len() - before));
     Ok(())
 }
 
