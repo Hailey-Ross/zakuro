@@ -1,0 +1,56 @@
+# Builds Zakuro and nativemons-recomp for Windows and publishes them for the nativeMons launcher.
+# No games, keys, system files or recompiled game code: players build their own from their own dumps.
+name: nativeMons Windows release
+
+on:
+  push:
+    branches: [hails-additions]
+    paths-ignore: ["**.md", "docs/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nativemons-windows-release
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: nativemons-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: nativemons-${{ runner.os }}-
+      - name: Build
+        run: cargo build --release --locked -p zakuro -p nativemons-recomp
+      - name: Package
+        run: |
+          rm -rf dist && mkdir -p dist/zakuro
+          cp target/release/zakuro.exe target/release/nativemons-recomp.exe dist/zakuro/
+          cp LICENSE dist/zakuro/LICENSE-zakuro.txt
+          rev=$(grep -A2 'name = "recomp3ds"' Cargo.lock | grep -oE '#[0-9a-f]{40}' | tr -d '#')
+          printf 'Zakuro with 3dsrecomp, for nativeMons\nBased on Zakuro (https://github.com/fearkov/zakuro, MIT) and 3dsrecomp %s (https://github.com/fearkov/3dsrecomp, MIT)\nSource: https://github.com/%s/tree/%s\n' \
+            "$rev" "$GITHUB_REPOSITORY" "$GITHUB_SHA" > dist/zakuro/NATIVEMONS-BUILD.txt
+          if find dist -iregex '.*\.\(3ds\|cci\|cia\|cxi\|app\|sav\|c\|o\)$' -o -iregex '.*/[0-9a-f]\{16\}\.dll' | grep .; then echo "Game data in the package"; exit 1; fi
+          dist/zakuro/nativemons-recomp.exe check missing.dll || true
+          (cd dist && powershell -NoProfile -Command "Compress-Archive -Path zakuro -DestinationPath zakuro-nativemons-windows-x64.zip")
+          ls -la dist
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="windows-${GITHUB_SHA:0:9}"
+          gh release create "$tag" dist/zakuro-nativemons-windows-x64.zip \
+            --target "$GITHUB_SHA" --title "Windows build ($tag)" \
+            --notes "Zakuro and nativemons-recomp for the nativeMons launcher, built from this commit. Source and licenses are in this repository and fearkov/3dsrecomp. No games, keys, system files or recompiled game code are included."

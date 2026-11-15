@@ -1,0 +1,12 @@
+[package]
+name = "nativemons-recomp"
+description = "Recompiles a player's own 3DS dump for Zakuro without a window, for the nativeMons launcher"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+
+[dependencies]
+recomp3ds = { git = "https://github.com/fearkov/3dsrecomp" }
+recomp-abi.workspace = true
+sha2 = "0.10"
