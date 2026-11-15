@@ -135,6 +135,7 @@ pub fn run_with(linked: Option<Linked>, overlay: Option<Box<dyn GameOverlay>>) {
         paused: false,
         fast_forward_key: false,
         fast_forwarding: false,
+        focused: true,
         next_shown: Instant::now(),
         stop: false,
         camera: None,
@@ -440,6 +441,8 @@ struct App {
     paused: bool,
     /// Tab is held down, for fast forward.
     fast_forward_key: bool,
+    /// whether the window is in front, for --focus-pad.
+    focused: bool,
     /// the game runs as fast as it can, its sound left out.
     fast_forwarding: bool,
     /// when fast forward shows its next frame, on a grid at the console's
@@ -529,7 +532,10 @@ impl ApplicationHandler for App {
         }
 
         let size = self.window_size();
-        let attributes = Window::default_attributes().with_title("Zakuro").with_inner_size(size);
+        let mut attributes = Window::default_attributes().with_title("Zakuro").with_inner_size(size);
+        if let Some((x, y)) = self.options.at {
+            attributes = attributes.with_position(winit::dpi::PhysicalPosition::new(x, y));
+        }
         let renderer = self.options.renderer.unwrap_or(match self.settings.renderer {
             Renderer::Vulkan => RendererKind::Vulkan,
             Renderer::OpenGl => RendererKind::OpenGl,
@@ -586,7 +592,9 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             // keys let go while another window has the keyboard never come
+            WindowEvent::Focused(true) => self.focused = true,
             WindowEvent::Focused(false) => {
+                self.focused = false;
                 self.fast_forward_key = false;
                 self.blow(false);
                 self.keyboard.release();
@@ -1369,7 +1377,8 @@ impl App {
         // while ZR has the trigger, whichever no button of the console's is on
         let free = |button: gilrs::Button| self.settings.pad.map().iter().all(|&(_, bound)| bound != button);
         let trigger = [gilrs::Button::RightTrigger2, gilrs::Button::RightThumb].into_iter().find(|&button| free(button));
-        let fast = playing && (self.fast_forward_key || trigger.is_some_and(|trigger| self.gamepads.holding(trigger)));
+        let pad = self.focused || !self.options.focus_pad;
+        let fast = playing && (self.fast_forward_key || (pad && trigger.is_some_and(|trigger| self.gamepads.holding(trigger))));
         if fast {
             // the output waits out fast forward rather than run dry
             if let Some(audio) = &self.audio {
@@ -1397,8 +1406,12 @@ impl App {
 
         self.next_frame += FRAME_TIME;
         if fast {
-            // nothing to wait for
-            self.next_frame = Instant::now();
+            self.next_frame = match self.options.fast_forward {
+                // n frames in one frame's time, never more than a frame behind
+                Some(times) => (self.next_frame - FRAME_TIME + FRAME_TIME / times).max(Instant::now() - FRAME_TIME),
+                // nothing to wait for
+                None => Instant::now(),
+            };
         }
         // behind the schedule, showing the frame would wait on the display,
         // so it goes unshown, a few at most. a presenter that does not wait,
@@ -1457,6 +1470,8 @@ impl App {
         let Some(game) = &mut self.game else { return };
         let input = match &mut game.replay {
             Some(replay) => replay.input(game.frame),
+            // with --focus-pad, a window in front of the game (nativeMons' guide overlay) keeps the controller
+            None if self.options.focus_pad && !self.focused => self.keyboard.state(),
             None => self.gamepads.apply(self.keyboard.state()),
         };
         game.frame += 1;

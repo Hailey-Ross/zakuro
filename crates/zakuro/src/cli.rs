@@ -30,6 +30,12 @@ pub struct Options {
     pub mute: bool,
     /// start in full screen, as F11 would (nativeMons).
     pub fullscreen: bool,
+    /// where the window opens, so full screen is on that screen (nativeMons).
+    pub at: Option<(i32, i32)>,
+    /// controllers only reach the game while its window is in front (nativeMons: its guide overlay).
+    pub focus_pad: bool,
+    /// fast forward at most this many times the console's speed, unlimited when none (nativeMons).
+    pub fast_forward: Option<u32>,
 }
 
 const USAGE: &str = "\
@@ -63,6 +69,9 @@ options:
                                    code around
   --mute                           play no sound
   --fullscreen                     start in full screen
+  --at <x,y>                       open the window there, so full screen is on that screen
+  --focus-pad                      controllers only play while the window is in front
+  --fast-forward <n>               fast forward at most n times the console's speed
   --data <dir>                     where saves live (default: the system's
                                    place for data, ~/.local/share/zakuro,
                                    ~/Library/Application Support/zakuro or
@@ -89,6 +98,9 @@ pub fn parse() -> Result<Options, String> {
         interpreter: false,
         mute: false,
         fullscreen: false,
+        at: None,
+        focus_pad: false,
+        fast_forward: None,
     };
 
     let mut args = std::env::args().skip(1);
@@ -134,6 +146,18 @@ pub fn parse() -> Result<Options, String> {
             "--interpreter" => options.interpreter = true,
             "--mute" => options.mute = true,
             "--fullscreen" => options.fullscreen = true,
+            "--focus-pad" => options.focus_pad = true,
+            "--fast-forward" => {
+                let times = args.next().and_then(|v| v.parse::<u32>().ok()).filter(|&n| n >= 2);
+                options.fast_forward = Some(times.ok_or("--fast-forward takes a speed of 2 or more")?);
+            }
+            "--at" => {
+                let at = args.next().and_then(|v| {
+                    let (x, y) = v.split_once(',')?;
+                    Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+                });
+                options.at = Some(at.ok_or("--at takes x,y, as numbers")?);
+            }
             "--profile" => options.profile = true,
             "--test-pattern" => options.test_pattern = true,
             // macOS hands an app it hasn't run before a process number
