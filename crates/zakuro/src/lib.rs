@@ -154,6 +154,20 @@ pub fn run_with(linked: Option<Linked>, overlay: Option<Box<dyn GameOverlay>>) {
         app.start();
         if let Some(game) = &mut app.game {
             run_headless(&mut game.system, frames);
+            if let Some(file) = app.options.state_save.clone() {
+                // written beside it first, so a cut-short state never takes the place of a whole one
+                let partial = PathBuf::from(format!("{file}.new"));
+                let saved = game.system.save_state().and_then(|bytes| {
+                    std::fs::write(&partial, &bytes).and_then(|()| std::fs::rename(&partial, &file)).map_err(|error| error.to_string())
+                });
+                match saved {
+                    Ok(()) => println!("nativemons: state saved"),
+                    Err(error) => {
+                        eprintln!("nativemons: state not saved, {error}");
+                        std::process::exit(3);
+                    }
+                }
+            }
         }
         return;
     }
@@ -680,6 +694,13 @@ impl App {
             if let Err(error) = self.play(Path::new(&rom)) {
                 eprintln!("zakuro: {error}");
                 std::process::exit(1);
+            }
+            if let (Some(file), Some(game)) = (self.options.state_load.clone(), &mut self.game) {
+                // a state that doesn't load leaves the game booting as usual
+                match std::fs::read(&file).map_err(|error| error.to_string()).and_then(|bytes| game.system.load_state(&bytes)) {
+                    Ok(()) => println!("nativemons: state loaded"),
+                    Err(error) => println!("nativemons: state not loaded, {error}"),
+                }
             }
         }
         if self.options.profile {

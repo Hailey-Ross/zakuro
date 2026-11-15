@@ -39,8 +39,9 @@ jobs:
           rm -rf dist && mkdir -p dist/zakuro
           cp target/release/zakuro.exe target/release/nativemons-recomp.exe dist/zakuro/
           cp LICENSE dist/zakuro/LICENSE-zakuro.txt
-          # Shared hint lists (addresses only), merged into each player's build by nativemons-recomp.
-          mkdir -p dist/zakuro/hints && cp nativemons-hints/*.hints dist/zakuro/hints/ 2>/dev/null || true
+          # Shared hint lists (addresses only) from the nativemons-hints branch, as they are now; launchers keep them current.
+          mkdir -p dist/zakuro/hints
+          git fetch -q --depth 1 origin nativemons-hints && git archive FETCH_HEAD hints | tar -x -C dist/zakuro
           rev=$(grep -A2 'name = "recomp3ds"' Cargo.lock | grep -oE '#[0-9a-f]{40}' | tr -d '#')
           printf 'Zakuro with 3dsrecomp, for nativeMons\nBased on Zakuro (https://github.com/fearkov/zakuro, MIT) and 3dsrecomp %s (https://github.com/fearkov/3dsrecomp, MIT)\nSource: https://github.com/%s/tree/%s\n' \
             "$rev" "$GITHUB_REPOSITORY" "$GITHUB_SHA" > dist/zakuro/NATIVEMONS-BUILD.txt

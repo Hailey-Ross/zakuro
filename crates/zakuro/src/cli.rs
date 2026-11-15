@@ -36,6 +36,10 @@ pub struct Options {
     pub focus_pad: bool,
     /// fast forward at most this many times the console's speed, unlimited when none (nativeMons).
     pub fast_forward: Option<u32>,
+    /// after a headless run, save the state to this file (nativeMons: quick start).
+    pub state_save: Option<String>,
+    /// start the game from this saved state, booting as usual when it cannot (nativeMons: quick start).
+    pub state_load: Option<String>,
 }
 
 const USAGE: &str = "\
@@ -72,6 +76,8 @@ options:
   --at <x,y>                       open the window there, so full screen is on that screen
   --focus-pad                      controllers only play while the window is in front
   --fast-forward <n>               fast forward at most n times the console's speed
+  --state-save <file>              with --headless, save the state to file after the frames
+  --state-load <file>              start the game from a state saved to file
   --data <dir>                     where saves live (default: the system's
                                    place for data, ~/.local/share/zakuro,
                                    ~/Library/Application Support/zakuro or
@@ -101,6 +107,8 @@ pub fn parse() -> Result<Options, String> {
         at: None,
         focus_pad: false,
         fast_forward: None,
+        state_save: None,
+        state_load: None,
     };
 
     let mut args = std::env::args().skip(1);
@@ -147,6 +155,8 @@ pub fn parse() -> Result<Options, String> {
             "--mute" => options.mute = true,
             "--fullscreen" => options.fullscreen = true,
             "--focus-pad" => options.focus_pad = true,
+            "--state-save" => options.state_save = Some(args.next().ok_or("--state-save needs a file")?),
+            "--state-load" => options.state_load = Some(args.next().ok_or("--state-load needs a file")?),
             "--fast-forward" => {
                 let times = args.next().and_then(|v| v.parse::<u32>().ok()).filter(|&n| n >= 2);
                 options.fast_forward = Some(times.ok_or("--fast-forward takes a speed of 2 or more")?);
