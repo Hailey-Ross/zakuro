@@ -153,7 +153,7 @@ pub fn run_with(linked: Option<Linked>, overlay: Option<Box<dyn GameOverlay>>) {
     if let Some(frames) = app.options.headless {
         app.start();
         if let Some(game) = &mut app.game {
-            run_headless(&mut game.system, frames);
+            run_headless(&mut game.system, game.replay.as_mut(), frames);
             if let Some(file) = app.options.state_save.clone() {
                 // written beside it first, so a cut-short state never takes the place of a whole one
                 let partial = PathBuf::from(format!("{file}.new"));
@@ -325,11 +325,15 @@ fn paint_test_pattern(config: Config) -> System {
     system
 }
 
-fn run_headless(system: &mut System, frames: u64) {
+/// with a ZAKURO_REPLAY recording, its inputs play frame by frame, as in a window (nativeMons: hint lists that go past the title).
+fn run_headless(system: &mut System, mut replay: Option<&mut zakuro_core::replay::Replay>, frames: u64) {
     let start = Instant::now();
     let mut outcome = FrameOutcome::Completed;
     let mut ran = 0;
-    for _ in 0..frames {
+    for frame in 0..frames {
+        if let Some(replay) = replay.as_deref_mut() {
+            system.set_input(replay.input(frame));
+        }
         outcome = system.run_frame();
         ran += 1;
         if outcome != FrameOutcome::Completed {
