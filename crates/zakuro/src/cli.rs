@@ -26,17 +26,18 @@ pub struct Options {
     pub interpreter: bool,
     /// play no sound (shh)
     pub mute: bool,
-    /// start in full screen, as F11 would (nativeMons).
+    /// start in full screen, as F11 would.
     pub fullscreen: bool,
-    /// where the window opens, so full screen is on that screen (nativeMons).
+    /// where the window opens, so full screen is on that screen.
     pub at: Option<(i32, i32)>,
-    /// controllers only reach the game while its window is in front (nativeMons: its guide overlay).
+    /// controllers only reach the game while its window is in front, for a front end that
+    /// shows its own window over the game.
     pub focus_pad: bool,
-    /// fast forward at most this many times the console's speed, unlimited when none (nativeMons).
+    /// fast forward at most this many times the console's speed, unlimited when none.
     pub fast_forward: Option<u32>,
-    /// after a headless run, save the state to this file (nativeMons: quick start).
+    /// after a headless run, save the state to this file.
     pub state_save: Option<String>,
-    /// start the game from this saved state, booting as usual when it cannot (nativeMons: quick start).
+    /// start the game from this saved state, booting as usual when it cannot.
     pub state_load: Option<String>,
 }
 

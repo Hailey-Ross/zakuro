@@ -157,9 +157,9 @@ pub fn run_with(linked: Option<Linked>, overlay: Option<Box<dyn GameOverlay>>) {
                     std::fs::write(&partial, &bytes).and_then(|()| std::fs::rename(&partial, &file)).map_err(|error| error.to_string())
                 });
                 match saved {
-                    Ok(()) => println!("nativemons: state saved"),
+                    Ok(()) => println!("zakuro: state saved"),
                     Err(error) => {
-                        eprintln!("nativemons: state not saved, {error}");
+                        eprintln!("zakuro: state not saved, {error}");
                         std::process::exit(3);
                     }
                 }
@@ -678,8 +678,8 @@ impl App {
             if let (Some(file), Some(game)) = (self.options.state_load.clone(), &mut self.game) {
                 // a state that doesn't load leaves the game booting as usual
                 match std::fs::read(&file).map_err(|error| error.to_string()).and_then(|bytes| game.system.load_state(&bytes)) {
-                    Ok(()) => println!("nativemons: state loaded"),
-                    Err(error) => println!("nativemons: state not loaded, {error}"),
+                    Ok(()) => println!("zakuro: state loaded"),
+                    Err(error) => println!("zakuro: state not loaded, {error}"),
                 }
             }
         }
@@ -1450,7 +1450,7 @@ impl App {
         let Some(game) = &mut self.game else { return };
         let input = match &mut game.replay {
             Some(replay) => replay.input(game.frame),
-            // with --focus-pad, a window in front of the game (nativeMons' guide overlay) keeps the controller
+            // with --focus-pad, a window in front of the game keeps the controller
             None if self.options.focus_pad && !self.focused => self.keyboard.state(),
             None => self.gamepads.apply(self.keyboard.state()),
         };
