@@ -853,6 +853,16 @@ struct Frame {
 }
 
 /// a display transfer's registers, taken apart
+/// a TextureCopy, its bytes in lines w/ gaps between them (see Gpu::texture_copy)
+pub(crate) struct TileCopy {
+    pub(crate) input: u32,
+    pub(crate) output: u32,
+    pub(crate) size: u32,
+    /// the bytes of each line and the gap after it, a zero line one run of them all
+    pub(crate) input_line: (u32, u32),
+    pub(crate) output_line: (u32, u32),
+}
+
 pub(crate) struct Transfer {
     pub(crate) input: u32,
     pub(crate) output: u32,
@@ -4341,7 +4351,13 @@ impl Hardware {
         };
         // drawn scaled, every size and row is that many times more, and the pixels averaged stay as many
         let n = self.scale as i32;
-        let constants: [i32; 11] = [
+        // a tiled output made smaller is a texture to be blurred (Ultra Moon's bloom), its texels come out as the console's,
+        // drawn scaled the bloom would keep all the detail and show copies of what glows instead of a glow
+        let footprint = match self.scale > 1 && t.output_tiled && (t.scale.0 > 1 || t.scale.1 > 1) {
+            true => n,
+            false => 0,
+        };
+        let constants: [i32; 12] = [
             t.copy.0 as i32 * n,
             t.copy.1 as i32 * n,
             // a flip turns the rows read over, not the whole input
@@ -4354,6 +4370,7 @@ impl Hardware {
             format_index(t.output_format),
             row as i32 * n,
             input_size.1 as i32 * n,
+            footprint,
         ];
         // and in between, from the input's twin into the output's, which holds what the output did b4
         let twinned = self.twins && (self.surfaces[source].twinned || self.surfaces[target].twinned);
@@ -4386,8 +4403,123 @@ impl Hardware {
         Ok(true)
     }
 
+    /// a TextureCopy out of a color buffer the GPU holds, done on the GPU, false for anything else, which the CPU does
+    /// whole tiles of the buffer laid out as tiles again, a bit of the picture turned into a texture (Final Fantasy Explorers does 6 a frame)
+    /// on the CPU each one waited on the GPU, wrote the buffer back and sent the texture up again, ouch
+    pub(crate) fn texture_copy<M: GpuMemory>(&mut self, memory: &mut M, copy: &TileCopy) -> Result<bool, String> {
+        let c = copy;
+        // where in a buffer it reads, when it's whole tiles from the same place in each row of tiles into lines of tiles
+        // as wide, x and the width in pixels, y and the rows in rows of memory from the buffer's start, then the output's width
+        let place = |s: &Surface| {
+            if !matches!(s.kind, Kind::Color(_)) || !s.tiled || c.input < s.addr || c.size == 0 {
+                return None;
+            }
+            let tile = 64 * s.kind.bytes();
+            let tile_row = s.width / 8 * tile;
+            // a zero width on either side copies one run, skipping nothing on both
+            let ((line, skip), (out_line, out_skip)) = match (c.input_line, c.output_line) {
+                ((0, _), _) | (_, (0, _)) => ((tile_row, 0), (tile_row, 0)),
+                lines => lines,
+            };
+            let offset = c.input - s.addr;
+            let whole = line > 0
+                && line.is_multiple_of(tile)
+                && line + skip == tile_row
+                && out_line == line
+                && out_skip.is_multiple_of(tile)
+                && c.size.is_multiple_of(line)
+                && offset.is_multiple_of(tile)
+                && offset % tile_row + line <= tile_row;
+            if !whole {
+                return None;
+            }
+            let (x, y, rows) = (offset % tile_row / tile * 8, offset / tile_row * 8, c.size / line * 8);
+            let out_width = (out_line + out_skip) / tile * 8;
+            // textures go up to 1024
+            (y + rows <= s.height && out_width <= 1024).then_some((x, y, line / tile * 8, rows, out_width))
+        };
+        // the buffer that drew those rows last
+        let Some((found, (x, y, copy_width, rows, out_width))) = (0..self.surfaces.len())
+            .filter_map(|i| Some((i, place(&self.surfaces[i])?)))
+            .max_by_key(|&(i, (_, y, _, rows, _))| newest(&self.surfaces[i], (y, y + rows)))
+        else {
+            return Ok(false);
+        };
+        // rows memory has already are the CPU's
+        if !newest(&self.surfaces[found], (y, y + rows)).0 {
+            return Ok(false);
+        }
+        let (addr, width, height, kind) = {
+            let s = &self.surfaces[found];
+            (s.addr, s.width, s.height, s.kind)
+        };
+        // an output over the rows read is the CPU's too, which goes in order
+        let row_bytes = (width * kind.bytes()) as u64;
+        let (read, read_end) = (addr as u64 + y as u64 * row_bytes, addr as u64 + (y + rows) as u64 * row_bytes);
+        let output_end = c.output as u64 + (out_width * rows * kind.bytes()) as u64;
+        if read < output_end && (c.output as u64) < read_end {
+            return Ok(false);
+        }
+        self.begin()?;
+        // a flush looking one of them up drops what the other had checked
+        let (source, target) = loop {
+            let source = self.surface_rows(memory, addr, (width, height), kind, true, Some((y, y + rows)))?;
+            let target = self.surface(memory, c.output, (out_width, rows), kind, true)?;
+            if self.surfaces[source].checked && self.surfaces[target].checked {
+                break (source, target);
+            }
+        };
+        // and in between, from the input's twin into the output's, which holds what the output did b4
+        let twinned = self.twins && (self.surfaces[source].twinned || self.surfaces[target].twinned);
+        let twinned = twinned
+            && match self.make_twin(target) {
+                Ok(()) => true,
+                Err(error) => {
+                    log::error!("the GPU could not copy the picture in between, {error}");
+                    self.set_twins(false);
+                    false
+                }
+            };
+        self.end_rendering();
+        self.mark(Work::Copy, false);
+        self.barrier();
+        let n = self.scale;
+        let layers = vk::ImageSubresourceLayers::default().aspect_mask(vk::ImageAspectFlags::COLOR).layer_count(1);
+        // the images hold rows bottom first, the output's rows are all of it
+        let region = [vk::ImageCopy::default()
+            .src_subresource(layers)
+            .dst_subresource(layers)
+            .src_offset(vk::Offset3D { x: (x * n) as i32, y: ((height - y - rows) * n) as i32, z: 0 })
+            .extent(vk::Extent3D { width: copy_width * n, height: rows * n, depth: 1 })];
+        let image = |s: &Surface, twin: bool| match &s.twin {
+            Some(image) if twin && s.twinned => image.image,
+            _ => s.image.image,
+        };
+        let mut copies = vec![(image(&self.surfaces[source], false), image(&self.surfaces[target], false))];
+        if twinned {
+            copies.push((image(&self.surfaces[source], true), image(&self.surfaces[target], true)));
+        }
+        for (from, to) in copies {
+            // safe bc we're recording, outside rendering, between two color images in the general layout,
+            // the regions inside them
+            unsafe {
+                self.unfenced = true;
+                self.device.cmd_copy_image(self.commands, from, vk::ImageLayout::GENERAL, to, vk::ImageLayout::GENERAL, &region);
+            }
+        }
+        if twinned {
+            self.surfaces[target].twin_changed();
+        }
+        self.uploads = true;
+        self.surfaces[target].drew((0, rows));
+        self.surfaces[target].guard_writes(memory);
+        self.overdrawn(target, (0, rows), None);
+        log::debug!("texture copy of {copy_width}x{rows} at {x},{y} of 0x{addr:08X} on the GPU");
+        Ok(true)
+    }
+
     /// records the transfer shader going over size pixels, from one image to another, like the constants say
-    fn dispatch_transfer(&mut self, (source, target): (vk::ImageView, vk::ImageView), constants: [i32; 11], size: (u32, u32)) -> Result<(), String> {
+    fn dispatch_transfer(&mut self, (source, target): (vk::ImageView, vk::ImageView), constants: [i32; 12], size: (u32, u32)) -> Result<(), String> {
         self.mark(Work::Transfer, false);
         let (layout, pipeline) = self.transfer_pipeline()?;
         self.end_rendering();
@@ -4403,7 +4535,7 @@ impl Hardware {
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                 .image_info(&infos[1]),
         ];
-        let mut bytes = [0u8; 44];
+        let mut bytes = [0u8; 48];
         for (bytes, constant) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(constants) {
             *bytes = constant.to_le_bytes();
         }
@@ -4573,7 +4705,7 @@ impl Hardware {
             let n = self.scale;
             let (width, height) = ((texture.width * n) as i32, (rows * n) as i32);
             let (row, source_height) = ((row * n) as i32, (self.surfaces[source].height * n) as i32);
-            let constants = [width, height, height, height, 1, 1, 1, format, format, row, source_height];
+            let constants = [width, height, height, height, 1, 1, 1, format, format, row, source_height, 0];
             let from = self.surface_view(source, twin);
             self.dispatch_transfer((from, view), constants, (texture.width * n, rows * n))?;
         }
@@ -5008,7 +5140,7 @@ impl Hardware {
     fn transfer_pipeline(&mut self) -> Result<(vk::PipelineLayout, vk::Pipeline), String> {
         if self.transfer.is_none() {
             let images = [vk::DescriptorType::STORAGE_IMAGE; 2];
-            self.transfer = Some(self.compute(TRANSFER_SPIRV, &images, 11 * 4)?);
+            self.transfer = Some(self.compute(TRANSFER_SPIRV, &images, 12 * 4)?);
         }
         let transfer = self.transfer.as_ref().expect("made above");
         Ok((transfer.layout, transfer.pipeline))
