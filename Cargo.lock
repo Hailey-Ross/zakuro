@@ -2247,7 +2247,7 @@ dependencies = [
 
 [[package]]
 name = "nativemons-recomp"
-version = "0.2.32"
+version = "0.1.0"
 dependencies = [
  "recomp-abi",
  "recomp3ds",
